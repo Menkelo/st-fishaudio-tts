@@ -11,7 +11,11 @@
 
 import { event_types, eventSource, getRequestHeaders, saveSettingsDebounced } from '../../../../script.js';
 import { extension_settings, renderExtensionTemplateAsync } from '../../../extensions.js';
-import { getPreviewString, registerTtsProvider } from '../../tts/index.js';
+import { getContext } from '../../../st-context.js';
+import { getPreviewString, getCharacters, initVoiceMap, registerTtsProvider } from '../../tts/index.js';
+
+const DEFAULT_VOICE_MARKER = '[Default Voice]';
+const DISABLED_VOICE_MARKER = 'disabled';
 
 const PROVIDER_NAME = 'Fish Audio';
 const MODULE_NAME = 'fish-audio-tts';
@@ -282,12 +286,118 @@ export class FishAudioTtsProvider {
 // 之前只有一个挂在 TTS 里的 provider 设置，装完在扩展列表里看不到任何东西，
 // 所以这里补一个真正的扩展面板，把配置和自检都放进来。
 
+/**
+ * TTS 扩展会给每个新渠道把 [Default Voice] 默认设成 disabled（防止装完就乱念），
+ * 所以装好后点朗读一声不响 —— 而面板里的「测试配音」是直连接口，照样出声，
+ * 看起来像"面板好使、真朗读不行"。这里在启用时把声音接回去。
+ *
+ * 同时把逐句朗读需要的三个分轨键补上：
+ * ST 的 multi_voice 会把一句话拆成 对话 / 动作 / 旁白 三类，
+ * 分别用 `${角色} ("Quotes")`、`${角色} (*Text inside asterisks*)`、`${角色} (Other text)` 查声音，
+ * 缺键就直接抛 "not in voicemap"。这和 dsh 那边的「beats」是同一种切法。
+ */
+const SEGMENT_SUFFIXES = ['("Quotes")', '(*Text inside asterisks*)', '(Other text)'];
+
+async function ensureVoiceMapReady() {
+    const tts = extension_settings.tts;
+    if (!tts) {
+        return;
+    }
+    const store = tts[PROVIDER_NAME] = tts[PROVIDER_NAME] || {};
+    if (typeof store.voiceMap !== 'object' || !store.voiceMap) {
+        store.voiceMap = {};
+    }
+    const map = store.voiceMap;
+    const voice = String(moduleSettings().referenceId || DEFAULT_VOICE);
+    let changed = false;
+
+    if (!map[DEFAULT_VOICE_MARKER] || map[DEFAULT_VOICE_MARKER] === DISABLED_VOICE_MARKER) {
+        map[DEFAULT_VOICE_MARKER] = voice;
+        changed = true;
+    }
+
+    // 要补键的名字来源有三个：人物卡列表、当前对话双方、聊天里实际出现过的说话人。
+    // 少一个就会在朗读时抛 "not in voicemap"，所以要尽量全覆盖。
+    const context = getContext();
+    const names = new Set();
+    for (const name of getCharacters(true) || []) {
+        names.add(name);
+    }
+    for (const name of [context.name1, context.name2]) {
+        if (name) {
+            names.add(name);
+        }
+    }
+    for (const message of context.chat || []) {
+        if (message?.name) {
+            names.add(message.name);
+        }
+    }
+    names.delete(DEFAULT_VOICE_MARKER);
+    names.delete('SillyTavern System');
+
+    for (const name of names) {
+        for (const suffix of SEGMENT_SUFFIXES) {
+            const key = `${name} ${suffix}`;
+            if (!map[key]) {
+                map[key] = DEFAULT_VOICE_MARKER;
+                changed = true;
+            }
+        }
+    }
+
+    // 分段朗读这条路是直接拿消息名查表的，不像整段朗读那样把
+    // "SillyTavern System" 归一到 [Default Voice]，所以它也要有自己的键。
+    for (const suffix of SEGMENT_SUFFIXES) {
+        const key = `SillyTavern System ${suffix}`;
+        if (!map[key]) {
+            map[key] = DEFAULT_VOICE_MARKER;
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        saveSettingsDebounced();
+    }
+    try {
+        // 必须用 initVoiceMap(false)：它会按 multi_voice 把每个角色展开成
+        // 对话 / 动作 / 旁白 三个键。用 true 只建平名的键，
+        // 反而会把运行时的分段键冲掉，朗读时依旧报 "not in voicemap"。
+        await initVoiceMap(false);
+    } catch (error) {
+        console.warn('[Fish Audio] 重建声音映射失败', error);
+    }
+    if (changed) {
+        console.log('[Fish Audio] 已补齐声音映射');
+    }
+    return changed;
+}
+
+/** 打开逐句朗读：每行一段 + 对话/动作/旁白分开念。 */
+function enableSentenceMode(on) {
+    const tts = extension_settings.tts;
+    if (!tts) {
+        return;
+    }
+    tts.multi_voice_enabled = on;
+    tts.narrate_by_paragraphs = on;
+    $('#tts_multi_voice_enabled').prop('checked', on);
+    $('#tts_narrate_by_paragraphs').prop('checked', on);
+    saveSettingsDebounced();
+}
+
+function isSentenceMode() {
+    const tts = extension_settings.tts || {};
+    return Boolean(tts.multi_voice_enabled && tts.narrate_by_paragraphs);
+}
+
 function syncPanelFromStore() {
     const s = moduleSettings();
     $('#fish_panel_api_key').val(s.apiKey || '');
     $('#fish_panel_model').val(s.model || defaultSettings.model);
     $('#fish_panel_reference').val(s.referenceId || '');
     $('#fish_panel_proxy').prop('checked', s.useProxy !== false);
+    $('#fish_panel_sentences').prop('checked', isSentenceMode());
     renderPanelStatus();
 }
 
@@ -297,12 +407,14 @@ function renderPanelStatus() {
     const ttsReady = typeof registerTtsProvider === 'function';
     const currentProvider = $('#tts_provider').val();
     const ttsEnabled = $('#tts_enabled').prop('checked');
+    const sentence = isSentenceMode();
 
     $('#fish_panel_status').html([
         `密钥：<b style="color:${hasKey ? 'inherit' : 'red'}">${hasKey ? '已填' : '未填'}</b>`,
         `TTS 扩展：<b style="color:${ttsReady ? 'inherit' : 'red'}">${ttsReady ? '已启用' : '未启用'}</b>`,
         `当前渠道：<b>${currentProvider || '未选'}</b>`,
         `TTS 总开关：<b>${ttsEnabled ? '已开' : '关'}</b>`,
+        `逐句朗读：<b style="color:${sentence ? 'inherit' : 'red'}">${sentence ? '已开' : '关（整段念）'}</b>`,
     ].join(' ｜ '));
 }
 
@@ -325,8 +437,8 @@ function bindPanel() {
         saveSettingsDebounced();
     });
 
-    // 一键选中渠道 + 打开总开关，省得用户去 TTS 面板里翻
-    $('#fish_panel_activate').on('click', () => {
+    // 一键选中渠道 + 打开总开关 + 打开逐句朗读 + 补齐声音映射
+    $('#fish_panel_activate').on('click', async () => {
         const select = $('#tts_provider');
         const exists = select.find('option').filter((_, o) => o.value === PROVIDER_NAME).length > 0;
         if (!exists) {
@@ -338,8 +450,22 @@ function bindPanel() {
         if (enabled.length && !enabled.prop('checked')) {
             enabled.trigger('click');
         }
+        enableSentenceMode(true);
+        await ensureVoiceMapReady();
+        syncPanelFromStore();
+        toastr.success('已切到 Fish Audio、打开总开关和逐句朗读', PROVIDER_NAME);
+    });
+
+    // 只修声音映射：用户自己配过角色的声音，不想被上面那个按钮覆盖时用
+    $('#fish_panel_fix_voices').on('click', async () => {
+        const changed = await ensureVoiceMapReady();
+        syncPanelFromStore();
+        toastr[changed ? 'success' : 'info'](changed ? '已补齐缺的声音映射' : '声音映射本来就完整', PROVIDER_NAME);
+    });
+
+    $('#fish_panel_sentences').on('change', () => {
+        enableSentenceMode(Boolean($('#fish_panel_sentences').prop('checked')));
         renderPanelStatus();
-        toastr.success('已切到 Fish Audio 并打开 TTS 开关', PROVIDER_NAME);
     });
 
     $('#fish_panel_load_voices').on('click', async () => {
