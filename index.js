@@ -79,6 +79,30 @@ function shouldSkipSegment(voiceMapKey) {
     return map[voiceMapKey] === DISABLED_VOICE_MARKER;
 }
 
+/**
+ * SillyTavern 每跳过一段被禁用的内容就弹一条 "TTS voice for X is disabled."，
+ * 手动点朗读时是每段弹一次 —— 选了"只念引号句"就变成刷屏。
+ *
+ * 这条提示本身没有错（确实是我们让它禁用的），只是噪音。这里只拦这一条，
+ * 其它 TTS 提示照常放行。
+ */
+let suppressedDisabledToasts = 0;
+
+function muteDisabledVoiceToasts() {
+    if (window.__fishAudioToastHooked || typeof window.toastr?.info !== 'function') {
+        return;
+    }
+    const original = window.toastr.info;
+    window.toastr.info = function (message, ...rest) {
+        if (typeof message === 'string' && /^TTS voice for .+ is disabled\.?$/.test(message.trim())) {
+            suppressedDisabledToasts += 1;
+            return null;
+        }
+        return original.call(this, message, ...rest);
+    };
+    window.__fishAudioToastHooked = true;
+}
+
 const defaultSettings = {
     apiKey: '',
     model: 's2.1-pro-free',
@@ -616,6 +640,8 @@ function renderPanelStatus() {
     $('#fish_panel_counter').html(
         `本次会话：发出 <b>${runtimeStats.requests}</b> 次合成请求，`
         + `在本地挡掉 <b>${runtimeStats.skipped}</b> 段不该念的内容`
+        + `<br><span style="opacity:.7">另有 ${suppressedDisabledToasts} 段由 SillyTavern 直接跳过`
+        + `（本来会各弹一条 "voice is disabled"，已静音）</span>`
         + (runtimeStats.lastTexts.length ? '<br><span style="opacity:.7">最近：</span>'
             + runtimeStats.lastTexts.map(item => `${item.skipped ? '🚫' : '🔊'} ${escapeHtml(item.text)}`).join(' ｜ ')
             : ''),
@@ -733,6 +759,9 @@ function restoreProviderSelection() {
 
 jQuery(async () => {
     const store = moduleSettings();
+
+    // 越早越好：ST 的跳过提示可能在扩展初始化之后立刻出现
+    muteDisabledVoiceToasts();
 
     try {
         registerTtsProvider(PROVIDER_NAME, FishAudioTtsProvider);

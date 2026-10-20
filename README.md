@@ -88,6 +88,18 @@ SillyTavern 在多数情况下自己就会跳过标记为 `disabled` 的段落�
 
 如果「挡掉」一直显示 0 而你不该念的段落却在出声，说明是 ST 那一侧的判断按下了，可以据此分清问题在哪一层。
 
+### 关于 "TTS voice for X is disabled" 提示
+
+选了「只念引号句」后，SillyTavern 每跳过一段都会弹一条 `TTS voice for Washa is disabled.`，手动点朗读时是**每段弹一次**，看着像刷屏报错。
+
+这条提示本身没错（确实是我们让它禁用的），只是噪音。扩展会把这一条静音，其它 TTS 提示照常显示。被静音的段数会显示在面板计数里：
+
+```
+另有 2 段由 SillyTavern 直接跳过（本来会各弹一条 "voice is disabled"，已静音）
+```
+
+配音本身不受影响。
+
 ## 实现要点
 
 - 调用 `POST https://api.fish.audio/v1/tts`，body 是 `{ text, reference_id, format, latency }`。
