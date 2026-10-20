@@ -8,6 +8,6 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Menkelo",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "homePage": "https://github.com/Menkelo/st-fishaudio-tts"
 }

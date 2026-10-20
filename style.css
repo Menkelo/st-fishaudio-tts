@@ -63,3 +63,16 @@
     width: auto;
     min-width: 130px;
 }
+
+/*
+ * 朗读键（.mes_narrate）默认是 display:none，ST 只在 body.tts 时把它放出来，
+ * 而且它还被塞进「扩展消息操作」折叠区。用户看不到也点不着，就是"点了没反应"。
+ * 这里用足够高的选择器把它强制显示；开关本身在扩展面板里控制。
+ */
+body.fish-tts-show-read-buttons .mes .mes_narrate {
+    display: inline-block !important;
+}
+
+body.fish-tts-show-read-buttons .mes .mes_buttons .extraMesButtons {
+    display: flex !important;
+}

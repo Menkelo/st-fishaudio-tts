@@ -11,6 +11,7 @@
 
 import { event_types, eventSource, getRequestHeaders, saveSettingsDebounced } from '../../../../script.js';
 import { extension_settings, renderExtensionTemplateAsync } from '../../../extensions.js';
+import { power_user } from '../../../power-user.js';
 import { getContext } from '../../../st-context.js';
 import { getPreviewString, getCharacters, initVoiceMap, registerTtsProvider } from '../../tts/index.js';
 
@@ -110,6 +111,7 @@ const defaultSettings = {
     format: 'mp3',
     latency: 'normal',
     useProxy: true,
+    showReadButtons: true,
     available_voices: [],
 };
 
@@ -501,6 +503,32 @@ function isClickToPlay() {
     return extension_settings.tts ? !extension_settings.tts.auto_generation : false;
 }
 
+/**
+ * 朗读按钮藏在 ST 的「扩展消息操作」折叠区里。
+ *
+ * power_user.expand_message_actions 为 false 时，那个区域是 display:none，
+ * 按钮虽然存在但宽高为 0 —— 用户根本点不到，看着就像"点了没反应"。
+ * 这个开关在 ST 的用户设置 → 消息里，藏得很深，所以这里直接代管。
+ */
+function setShowReadButtons(on, persist = true) {
+    $('body').toggleClass('fish-tts-show-read-buttons', on);
+    if (power_user) {
+        // 折叠区也要展开，否则按钮挤在 2px 宽的容器里
+        power_user.expand_message_actions = on;
+        $('body').toggleClass('expandMessageActions', on);
+        $('#expandMessageActions').prop('checked', on);
+    }
+    if (persist) {
+        moduleSettings().showReadButtons = on;
+        saveSettingsDebounced();
+    }
+    return true;
+}
+
+function isShowingReadButtons() {
+    return $('body').hasClass('fish-tts-show-read-buttons');
+}
+
 // 逐角色朗读模式 -------------------------------------------------------
 // 每个角色在 ST 里有三个映射键：引号对话 / 星号动作 / 其他文字。
 // 把后两个设成 disabled，就只念这个角色的引号句子。
@@ -638,6 +666,7 @@ function syncPanelFromStore() {
     $('#fish_panel_proxy').prop('checked', s.useProxy !== false);
     $('#fish_panel_sentences').prop('checked', isSentenceMode());
     $('#fish_panel_clickplay').prop('checked', isClickToPlay());
+    $('#fish_panel_showbtns').prop('checked', isShowingReadButtons());
     renderPanelStatus();
     renderCharacterModes();
 }
@@ -650,6 +679,7 @@ function renderPanelStatus() {
     const ttsEnabled = $('#tts_enabled').prop('checked');
     const sentence = isSentenceMode();
     const clickPlay = isClickToPlay();
+    const showBtns = isShowingReadButtons();
 
     $('#fish_panel_status').html([
         `密钥：<b style="color:${hasKey ? 'inherit' : 'red'}">${hasKey ? '已填' : '未填'}</b>`,
@@ -658,6 +688,7 @@ function renderPanelStatus() {
         `TTS 总开关：<b>${ttsEnabled ? '已开' : '关'}</b>`,
         `逐句朗读：<b style="color:${sentence ? 'inherit' : 'red'}">${sentence ? '已开' : '关（整段念）'}</b>`,
         `播放方式：<b>${clickPlay ? '点击才念' : '新消息自动念'}</b>`,
+        `朗读键：<b style="color:${showBtns ? 'inherit' : 'red'}">${showBtns ? '消息上可见' : '已隐藏'}</b>`,
     ].join(' ｜ '));
 
     $('#fish_panel_counter').html(
@@ -732,6 +763,35 @@ function bindPanel() {
         renderPanelStatus();
     });
 
+    $('#fish_panel_showbtns').on('change', () => {
+        setShowReadButtons(Boolean($('#fish_panel_showbtns').prop('checked')));
+        renderPanelStatus();
+    });
+
+    // 不依赖消息上那个藏起来的按钮，直接念最新一条
+    $('#fish_panel_read_last').on('click', () => {
+        const context = getContext();
+        const messages = context.chat || [];
+        let index = -1;
+        for (let i = messages.length - 1; i >= 0; i -= 1) {
+            if (!messages[i].is_system && messages[i].mes) {
+                index = i;
+                break;
+            }
+        }
+        if (index < 0) {
+            toastr.info('当前聊天里没有可朗读的消息', PROVIDER_NAME);
+            return;
+        }
+        const node = $(`#chat .mes[mesid="${index}"] .mes_narrate`);
+        if (node.length) {
+            node.trigger('click');
+            toastr.success('开始朗读最新一条', PROVIDER_NAME);
+        } else {
+            toastr.error('找不到最新消息的朗读入口，请刷新页面', PROVIDER_NAME);
+        }
+    });
+
     $('#fish_panel_load_voices').on('click', async () => {
         const provider = new FishAudioTtsProvider();
         provider.settings = { ...defaultSettings, ...moduleSettings() };
@@ -804,6 +864,9 @@ jQuery(async () => {
         $('#extensions_settings2').append(html);
         syncPanelFromStore();
         bindPanel();
+
+        // 刷新后把「显示朗读键」恢复成上次的状态
+        setShowReadButtons(moduleSettings().showReadButtons !== false, false);
 
         // TTS 面板可能比扩展晚渲染，稍后刷新一次状态
         setTimeout(() => { restoreProviderSelection(); renderPanelStatus(); }, 800);

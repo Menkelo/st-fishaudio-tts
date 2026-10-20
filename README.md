@@ -128,8 +128,22 @@ SillyTavern 在多数情况下自己就会跳过标记为 `disabled` 的段落�
 | 点朗读没声音 | TTS 总开关没开；或旁白声音没指定 |
 | `TTS received HTTP response with invalid data format` | 扩展版本过旧（旧版没补 Content-Type） |
 | 只念引号句不生效 | 逐句朗读没开。新版会自动打开；旧版需手动在 TTS 面板勾「多语音」+「按段落」 |
-| 点了朗读没反应 | 手动朗读前扩展会自动补声音映射；若仍无声，点面板「修复声音映射」 |
+| 点了朗读没反应 | 面板里勾「在消息上显示朗读键」。ST 默认把这几个按钮设为 `display:none`，只在特定条件下放出来 |
 | 新回复不自动念 | 开着「点击播放」。关掉它即可恢复自动朗读 |
+| 找不到朗读键 | 用它旁边的「朗读最新一条」按钮，或勾上「在消息上显示朗读键」 |
+
+### 为什么朗读键默认看不见
+
+SillyTavern 的样式表里有这么两条：
+
+```css
+.mes_translate, .sd_message_gen, .mes_ghost, .mes_narrate { display: none; }
+body.tts .mes_narrate { display: inline-block; }
+```
+
+再加上朗读键被放在「扩展消息操作」（`extraMesButtons`）折叠区里，而那个区又受 `expandMessageActions` 控制。两层叠起来的结果就是：**按钮存在、能触发，但宽高是 0，根本点不到**。
+
+面板里的「在消息上显示朗读键」会同时处理这两层，并记住你的选择。
 
 ## License
 

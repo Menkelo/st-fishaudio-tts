@@ -33,6 +33,11 @@
                 <span><b>点击播放</b>（只有我点消息上的朗读键才念，新回复不自动开口）</span>
             </label>
 
+            <label class="checkbox_label" for="fish_panel_showbtns">
+                <input id="fish_panel_showbtns" type="checkbox" />
+                <span><b>在消息上显示朗读键</b>（不开的话按钮是藏起来的，点了没反应就是这个原因）</span>
+            </label>
+
             <label class="checkbox_label" for="fish_panel_sentences">
                 <input id="fish_panel_sentences" type="checkbox" />
                 <span><b>逐句朗读</b>（每行一段，对话 / 动作 / 旁白分开念，而不是整段一口气念完）</span>
@@ -40,6 +45,7 @@
 
             <div class="fish-tts-actions">
                 <div id="fish_panel_activate" class="menu_button">启用配音（切到此渠道并打开开关）</div>
+                <div id="fish_panel_read_last" class="menu_button">朗读最新一条</div>
                 <div id="fish_panel_fix_voices" class="menu_button">修复声音映射</div>
                 <div id="fish_panel_test" class="menu_button">测试配音</div>
                 <div id="fish_panel_load_voices" class="menu_button">读取声音列表</div>
