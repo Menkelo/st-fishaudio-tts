@@ -2,7 +2,9 @@
     "display_name": "Fish Audio TTS (配音)",
     "loading_order": 21,
     "requires": [],
-    "optional": ["tts"],
+    "optional": [
+        "tts"
+    ],
     "js": "index.js",
     "css": "style.css",
     "author": "Menkelo",

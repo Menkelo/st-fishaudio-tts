@@ -1,0 +1,16 @@
+.fish-tts-settings label {
+    margin-top: 8px;
+    display: block;
+    font-weight: 600;
+}
+
+.fish-tts-settings .fish-tts-state {
+    align-self: center;
+    font-size: 0.9em;
+}
+
+.fish-tts-hint {
+    font-size: 0.9em;
+    opacity: 0.8;
+    margin-top: 10px;
+}
