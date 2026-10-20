@@ -112,6 +112,7 @@ const defaultSettings = {
     latency: 'normal',
     useProxy: true,
     showReadButtons: true,
+    clickQuotes: true,
     available_voices: [],
 };
 
@@ -529,6 +530,161 @@ function isShowingReadButtons() {
     return $('body').hasClass('fish-tts-show-read-buttons');
 }
 
+// 点引号句直接朗读 ---------------------------------------------------
+// 不经过 ST 的朗读队列：那条路要先有可见的按钮，还要 voicemap 配对。
+// 这里自己合成、自己播，点哪句念哪句。
+
+const QUOTE_PAIRS = [
+    ['"', '"'],
+    ['“', '”'],
+    ['「', '」'],
+    ['『', '』'],
+    ['«', '»'],
+    ['‘', '’'],
+    ['＂', '＂'],
+];
+
+let quoteAudio = null;
+
+function stopQuoteAudio() {
+    if (quoteAudio) {
+        quoteAudio.pause();
+        quoteAudio.removeAttribute('src');
+        quoteAudio = null;
+    }
+}
+
+/** 把一段文本里的引号内容切出来。 */
+function findQuoteRuns(text) {
+    const runs = [];
+    let index = 0;
+    while (index < text.length) {
+        const char = text[index];
+        const pair = QUOTE_PAIRS.find(item => item[0] === char);
+        if (!pair) {
+            index += 1;
+            continue;
+        }
+        const close = pair[1];
+        const end = text.indexOf(close, index + 1);
+        if (end < 0) {
+            index += 1;
+            continue;
+        }
+        const inner = text.slice(index + 1, end);
+        if (inner.trim()) {
+            runs.push({ start: index, end: end + 1, text: inner });
+        }
+        index = end + 1;
+    }
+    return runs;
+}
+
+/** 把消息里的引号包成可点的 span。 */
+function wrapQuotesInTextNode(node) {
+    const text = node.nodeValue || '';
+    const runs = findQuoteRuns(text);
+    if (!runs.length) {
+        return;
+    }
+    const fragment = document.createDocumentFragment();
+    let cursor = 0;
+    for (const run of runs) {
+        if (run.start > cursor) {
+            fragment.appendChild(document.createTextNode(text.slice(cursor, run.start)));
+        }
+        const span = document.createElement('span');
+        span.className = 'fish-quote';
+        span.dataset.quote = run.text;
+        span.textContent = text.slice(run.start, run.end);
+        span.title = '点击朗读这句';
+        fragment.appendChild(span);
+        cursor = run.end;
+    }
+    if (cursor < text.length) {
+        fragment.appendChild(document.createTextNode(text.slice(cursor)));
+    }
+    node.parentNode.replaceChild(fragment, node);
+}
+
+function decorateQuotes(root = document) {
+    if (!moduleSettings().clickQuotes) {
+        return;
+    }
+    const messages = root.querySelectorAll ? root.querySelectorAll('#chat .mes .mes_text') : [];
+    for (const textEl of messages) {
+        if (textEl.dataset.fishQuotesDone === '1') {
+            continue;
+        }
+        textEl.dataset.fishQuotesDone = '1';
+        const walker = document.createTreeWalker(textEl, NodeFilter.SHOW_TEXT, {
+            acceptNode(node) {
+                const parent = node.parentElement;
+                if (!parent || parent.closest('.fish-quote')) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                if (/^(SCRIPT|STYLE|CODE|PRE|TEXTAREA)$/.test(parent.tagName)) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                return NodeFilter.FILTER_ACCEPT;
+            },
+        });
+        const nodes = [];
+        while (walker.nextNode()) {
+            nodes.push(walker.currentNode);
+        }
+        for (const node of nodes) {
+            wrapQuotesInTextNode(node);
+        }
+    }
+}
+
+/** voiceMap 里存的可能是名字，转成真正能用的 reference_id。 */
+function resolveVoiceId(mapped) {
+    const fallback = String(moduleSettings().referenceId || DEFAULT_VOICE);
+    if (!mapped || mapped === DEFAULT_VOICE_MARKER || mapped === DISABLED_VOICE_MARKER) {
+        return fallback;
+    }
+    const list = moduleSettings().available_voices || [];
+    const hit = list.find(item => item.name === mapped || item.voice_id === mapped);
+    if (hit?.voice_id) {
+        return hit.voice_id;
+    }
+    return /^[A-Za-z0-9_-]{1,128}$/.test(mapped) ? mapped : fallback;
+}
+
+async function speakQuoteText(text, character) {
+    const trimmed = String(text || '').trim();
+    if (!trimmed) {
+        return;
+    }
+    if (!String(moduleSettings().apiKey || '').trim()) {
+        toastr.error('还没填 Fish Audio 密钥', PROVIDER_NAME);
+        return;
+    }
+
+    const map = extension_settings.tts?.[PROVIDER_NAME]?.voiceMap || {};
+    const voiceId = resolveVoiceId(map[character]);
+
+    const provider = new FishAudioTtsProvider();
+    provider.settings = { ...defaultSettings, ...moduleSettings() };
+
+    try {
+        const response = await provider.fetchTtsGeneration(trimmed, voiceId);
+        const blob = await response.blob();
+        stopQuoteAudio();
+        quoteAudio = new Audio(URL.createObjectURL(blob));
+        quoteAudio.onended = () => stopQuoteAudio();
+        await quoteAudio.play().catch(error => {
+            toastr.error('浏览器拦了自动播放，请再点一次', PROVIDER_NAME);
+            console.warn('[Fish Audio] 播放被拦', error);
+        });
+    } catch (error) {
+        console.error('[Fish Audio] 朗读引号失败', error);
+        toastr.error(String(error.message || error).slice(0, 120), PROVIDER_NAME);
+    }
+}
+
 // 逐角色朗读模式 -------------------------------------------------------
 // 每个角色在 ST 里有三个映射键：引号对话 / 星号动作 / 其他文字。
 // 把后两个设成 disabled，就只念这个角色的引号句子。
@@ -667,6 +823,7 @@ function syncPanelFromStore() {
     $('#fish_panel_sentences').prop('checked', isSentenceMode());
     $('#fish_panel_clickplay').prop('checked', isClickToPlay());
     $('#fish_panel_showbtns').prop('checked', isShowingReadButtons());
+    $('#fish_panel_clickquotes').prop('checked', moduleSettings().clickQuotes !== false);
     renderPanelStatus();
     renderCharacterModes();
 }
@@ -765,6 +922,19 @@ function bindPanel() {
 
     $('#fish_panel_showbtns').on('change', () => {
         setShowReadButtons(Boolean($('#fish_panel_showbtns').prop('checked')));
+        renderPanelStatus();
+    });
+
+    $('#fish_panel_clickquotes').on('change', () => {
+        const on = Boolean($('#fish_panel_clickquotes').prop('checked'));
+        moduleSettings().clickQuotes = on;
+        $('body').toggleClass('fish-tts-click-quotes', on);
+        if (on) {
+            // 重新扫一遍：之前跳过的消息要补上
+            $('#chat .mes .mes_text').forEach(el => { el.dataset.fishQuotesDone = ''; });
+            decorateQuotes();
+        }
+        saveSettingsDebounced();
         renderPanelStatus();
     });
 
@@ -888,6 +1058,30 @@ jQuery(async () => {
         $(document).on('click', '.mes_narrate', () => {
             ensureVoiceMapReady().catch(error => console.warn('[Fish Audio] 点击前补映射失败', error));
         });
+
+        // 点引号句直接念。自己合成自己播，不走 ST 的队列。
+        $(document).on('click', '.fish-quote', async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const span = event.currentTarget;
+            const text = span.dataset.quote || '';
+            const message = span.closest('.mes');
+            const character = message?.getAttribute('ch_name') || getContext().name2 || '';
+            span.classList.add('is-loading');
+            try {
+                await speakQuoteText(text, character);
+            } finally {
+                span.classList.remove('is-loading');
+            }
+        });
+
+        if (moduleSettings().clickQuotes) {
+            $('body').addClass('fish-tts-click-quotes');
+        }
+        decorateQuotes();
+        eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, () => setTimeout(decorateQuotes, 200));
+        eventSource.on(event_types.USER_MESSAGE_RENDERED, () => setTimeout(decorateQuotes, 200));
+        eventSource.on(event_types.CHAT_CHANGED, () => setTimeout(decorateQuotes, 600));
     } catch (error) {
         console.error('[Fish Audio] 面板渲染失败', error);
         toastr.error(String(error.message || error), 'Fish Audio');

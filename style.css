@@ -76,3 +76,20 @@ body.fish-tts-show-read-buttons .mes .mes_narrate {
 body.fish-tts-show-read-buttons .mes .mes_buttons .extraMesButtons {
     display: flex !important;
 }
+
+/* 点引号句朗读：让台词看起来能点 */
+body.fish-tts-click-quotes .mes_text .fish-quote {
+    cursor: pointer;
+    border-bottom: 1px dotted rgba(128, 128, 255, 0.65);
+    transition: background-color 0.15s ease-in-out;
+}
+
+body.fish-tts-click-quotes .mes_text .fish-quote:hover {
+    background-color: rgba(128, 128, 255, 0.18);
+    border-radius: 3px;
+}
+
+body.fish-tts-click-quotes .mes_text .fish-quote.is-loading {
+    opacity: 0.5;
+    cursor: progress;
+}
