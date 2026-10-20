@@ -1,7 +1,30 @@
+.fish-tts-panel label,
 .fish-tts-settings label {
     margin-top: 8px;
     display: block;
     font-weight: 600;
+}
+
+.fish-tts-hint {
+    font-size: 0.9em;
+    opacity: 0.8;
+    margin: 8px 0;
+}
+
+.fish-tts-status {
+    margin: 8px 0;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.15);
+    font-size: 0.9em;
+    line-height: 1.6;
+}
+
+.fish-tts-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin: 8px 0;
 }
 
 .fish-tts-settings .fish-tts-state {
@@ -9,8 +32,7 @@
     font-size: 0.9em;
 }
 
-.fish-tts-hint {
-    font-size: 0.9em;
-    opacity: 0.8;
-    margin-top: 10px;
+#fish_panel_audio {
+    width: 100%;
+    margin-top: 8px;
 }

@@ -13,7 +13,7 @@ SillyTavern → 顶栏「扩展」→ **Install extension**，填：
 https://github.com/Menkelo/st-fishaudio-tts
 ```
 
-刷新页面，打开「扩展」→「TTS」，渠道选 **Fish Audio**。
+刷新页面后，打开顶栏「扩展设置」，会多出一个 **Fish Audio TTS（配音）** 面板——配置和自检都在这个面板里，不用去翻 TTS 的子设置。
 
 **前置条件**：官方的 **TTS** 扩展必须处于启用状态（本扩展靠它注册渠道）。
 
@@ -30,7 +30,7 @@ enableCorsProxy: true
 
 ## 配置
 
-选中 **Fish Audio** 渠道后，面板里填：
+在 **Fish Audio TTS（配音）** 面板里填：
 
 | 项目 | 说明 |
 | --- | --- |
@@ -39,7 +39,10 @@ enableCorsProxy: true
 | 默认声音 ID | `reference_id`，可用「读取我的声音列表」拉取 |
 | 走 SillyTavern 代理 | 默认开，关掉会跨域失败 |
 
-点 **读取我的声音列表** 会把账号下的声音拉进下拉框，再在「角色声音」里逐个分配。
+填完点 **启用配音**：它会自动把 TTS 渠道切到 Fish Audio 并打开总开关，省得自己去翻。
+想先确认链路通不通，点 **测试配音**，面板里会直接播一段合成语音并显示大小。
+
+点 **读取声音列表** 会把账号下的声音拉进下拉框，再在「扩展」→「TTS」→「角色声音」里逐个分配。
 
 ## 关键细节：模型名必须走请求头
 
@@ -50,7 +53,7 @@ Fish Audio 的免费模型 `s2.1-pro-free` **必须放在请求头 `model`** 里
 
 就是 SillyTavern 原生的 TTS 用法：
 
-- 在「TTS」面板打开总开关
+- 点面板里的 **启用配音**（或自己在「TTS」面板选 Fish Audio 并打开总开关）
 - 勾选「自动朗读」或手动点每条消息上的朗读按钮
 - 在「角色声音」里给每个角色分配 voice id，旁白也要单独指定，否则旁白不出声
 
@@ -59,12 +62,15 @@ Fish Audio 的免费模型 `s2.1-pro-free` **必须放在请求头 `model`** 里
 - 调用 `POST https://api.fish.audio/v1/tts`，body 是 `{ text, reference_id, format, latency }`。
 - SillyTavern 的 `/proxy/` **不转发上游的 `Content-Type`**，而 TTS 扩展要求返回的 `blob.type` 以 `audio/` 开头，否则直接抛错。扩展里显式补上了 `audio/mpeg`。
 - 通过官方 TTS 扩展导出的 `registerTtsProvider(name, provider)` 注册，实现 `generateTts` / `fetchTtsVoiceObjects` / `previewTtsVoice` / `loadSettings` 等约定方法。
+- **渠道选择会自动恢复**：TTS 扩展在页面早期就读 `currentProvider`，那时第三方渠道还没注册，下拉框会回落到第一个选项。扩展在注册完成后会把上次的选择接回去，所以刷新页面不会丢渠道。
 
 ## 排错
 
 | 现象 | 原因 |
 | --- | --- |
+| 扩展列表里找不到面板 | 页面没刷新；或扩展目录名不是 `st-fishaudio-tts` |
 | 渠道下拉框里没有 Fish Audio | 官方 TTS 扩展没启用；或页面没刷新 |
+| 刷新后渠道变回别的 | 装的是旧版本，更新到最新即可（旧版不会自动恢复选择） |
 | 报跨域 / `Failed to fetch` | `enableCorsProxy` 没开 |
 | `402 余额不足` | 模型名放错位置，或免费额度用完了 |
 | 点朗读没声音 | TTS 总开关没开；或旁白声音没指定 |

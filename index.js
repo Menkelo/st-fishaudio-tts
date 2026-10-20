@@ -10,11 +10,12 @@
  */
 
 import { event_types, eventSource, getRequestHeaders, saveSettingsDebounced } from '../../../../script.js';
-import { extension_settings } from '../../../extensions.js';
+import { extension_settings, renderExtensionTemplateAsync } from '../../../extensions.js';
 import { getPreviewString, registerTtsProvider } from '../../tts/index.js';
 
 const PROVIDER_NAME = 'Fish Audio';
 const MODULE_NAME = 'fish-audio-tts';
+const FOLDER_NAME = 'st-fishaudio-tts';
 
 const ENDPOINT = 'https://api.fish.audio/v1/tts';
 const DEFAULT_VOICE = '6ce7ea8ada884bf3889fa7c7fb206691';
@@ -29,6 +30,18 @@ const defaultSettings = {
     available_voices: [],
 };
 
+/** 面板与 provider 共用同一份设置，避免两处各存一份对不上。 */
+function moduleSettings() {
+    extension_settings[MODULE_NAME] = extension_settings[MODULE_NAME] || {};
+    const store = extension_settings[MODULE_NAME];
+    for (const key of Object.keys(defaultSettings)) {
+        if (store[key] === undefined) {
+            store[key] = defaultSettings[key];
+        }
+    }
+    return store;
+}
+
 export class FishAudioTtsProvider {
     settings = {};
     voices = [];
@@ -37,12 +50,7 @@ export class FishAudioTtsProvider {
     audioElement = new Audio();
 
     constructor() {
-        this.handler = (key) => {
-            if (key !== 'api_key_fish_audio_tts') {
-                return;
-            }
-            this.renderVoiceState();
-        };
+        this.handler = () => this.renderVoiceState();
         eventSource.on(event_types.SECRET_WRITTEN, this.handler);
         eventSource.on(event_types.SECRET_DELETED, this.handler);
     }
@@ -54,6 +62,11 @@ export class FishAudioTtsProvider {
     get settingsHtml() {
         return `
         <div class="fish-tts-settings">
+            <p class="fish-tts-hint">
+                完整设置已放在「扩展」→ <b>Fish Audio TTS（配音）</b> 面板里，
+                这里只是同一份设置的镜像。建议统一在那个面板里改。
+            </p>
+
             <label for="fish_tts_api_key">Fish Audio 密钥</label>
             <input id="fish_tts_api_key" type="password" class="text_pole" placeholder="粘贴 API Key" />
 
@@ -86,9 +99,10 @@ export class FishAudioTtsProvider {
     }
 
     async loadSettings(settings) {
-        this.settings = { ...defaultSettings };
+        // 以面板里的设置为准，TTS 扩展传进来的只用来兜底。
+        this.settings = { ...defaultSettings, ...moduleSettings() };
         for (const key in settings) {
-            if (key in this.settings) {
+            if (key in defaultSettings && this.settings[key] === undefined) {
                 this.settings[key] = settings[key];
             }
         }
@@ -108,12 +122,20 @@ export class FishAudioTtsProvider {
     }
 
     onSettingsChange() {
-        this.settings.apiKey = String($('#fish_tts_api_key').val() || '').trim();
-        this.settings.model = String($('#fish_tts_model').val() || '').trim();
-        this.settings.referenceId = String($('#fish_tts_reference').val() || '').trim();
-        this.settings.useProxy = Boolean($('#fish_tts_proxy').prop('checked'));
+        const store = moduleSettings();
+        store.apiKey = String($('#fish_tts_api_key').val() || '').trim();
+        store.model = String($('#fish_tts_model').val() || '').trim();
+        store.referenceId = String($('#fish_tts_reference').val() || '').trim();
+        store.useProxy = Boolean($('#fish_tts_proxy').prop('checked'));
+        Object.assign(this.settings, {
+            apiKey: store.apiKey,
+            model: store.model,
+            referenceId: store.referenceId,
+            useProxy: store.useProxy,
+        });
         this.renderVoiceState();
         saveSettingsDebounced();
+        syncPanelFromStore();
     }
 
     renderVoiceState() {
@@ -172,6 +194,7 @@ export class FishAudioTtsProvider {
             voice_id: item._id,
             lang: 'zh-CN',
         }));
+        moduleSettings().available_voices = voices;
         this.settings.available_voices = voices;
         saveSettingsDebounced();
         return voices;
@@ -255,13 +278,150 @@ export class FishAudioTtsProvider {
     }
 }
 
+// 独立面板 -------------------------------------------------------------
+// 之前只有一个挂在 TTS 里的 provider 设置，装完在扩展列表里看不到任何东西，
+// 所以这里补一个真正的扩展面板，把配置和自检都放进来。
+
+function syncPanelFromStore() {
+    const s = moduleSettings();
+    $('#fish_panel_api_key').val(s.apiKey || '');
+    $('#fish_panel_model').val(s.model || defaultSettings.model);
+    $('#fish_panel_reference').val(s.referenceId || '');
+    $('#fish_panel_proxy').prop('checked', s.useProxy !== false);
+    renderPanelStatus();
+}
+
+function renderPanelStatus() {
+    const s = moduleSettings();
+    const hasKey = Boolean(String(s.apiKey || '').trim());
+    const ttsReady = typeof registerTtsProvider === 'function';
+    const currentProvider = $('#tts_provider').val();
+    const ttsEnabled = $('#tts_enabled').prop('checked');
+
+    $('#fish_panel_status').html([
+        `密钥：<b style="color:${hasKey ? 'inherit' : 'red'}">${hasKey ? '已填' : '未填'}</b>`,
+        `TTS 扩展：<b style="color:${ttsReady ? 'inherit' : 'red'}">${ttsReady ? '已启用' : '未启用'}</b>`,
+        `当前渠道：<b>${currentProvider || '未选'}</b>`,
+        `TTS 总开关：<b>${ttsEnabled ? '已开' : '关'}</b>`,
+    ].join(' ｜ '));
+}
+
+function bindPanel() {
+    $('#fish_panel_api_key').on('input', () => {
+        moduleSettings().apiKey = String($('#fish_panel_api_key').val() || '').trim();
+        saveSettingsDebounced();
+        renderPanelStatus();
+    });
+    $('#fish_panel_model').on('input', () => {
+        moduleSettings().model = String($('#fish_panel_model').val() || '').trim();
+        saveSettingsDebounced();
+    });
+    $('#fish_panel_reference').on('input', () => {
+        moduleSettings().referenceId = String($('#fish_panel_reference').val() || '').trim();
+        saveSettingsDebounced();
+    });
+    $('#fish_panel_proxy').on('change', () => {
+        moduleSettings().useProxy = Boolean($('#fish_panel_proxy').prop('checked'));
+        saveSettingsDebounced();
+    });
+
+    // 一键选中渠道 + 打开总开关，省得用户去 TTS 面板里翻
+    $('#fish_panel_activate').on('click', () => {
+        const select = $('#tts_provider');
+        const exists = select.find('option').filter((_, o) => o.value === PROVIDER_NAME).length > 0;
+        if (!exists) {
+            toastr.error('TTS 扩展里找不到 Fish Audio 渠道，请确认官方 TTS 扩展已启用后刷新页面', PROVIDER_NAME);
+            return;
+        }
+        select.val(PROVIDER_NAME).trigger('change');
+        const enabled = $('#tts_enabled');
+        if (enabled.length && !enabled.prop('checked')) {
+            enabled.trigger('click');
+        }
+        renderPanelStatus();
+        toastr.success('已切到 Fish Audio 并打开 TTS 开关', PROVIDER_NAME);
+    });
+
+    $('#fish_panel_load_voices').on('click', async () => {
+        const provider = new FishAudioTtsProvider();
+        provider.settings = { ...defaultSettings, ...moduleSettings() };
+        try {
+            const voices = await provider.fetchMyVoices();
+            $('#fish_panel_voice_count').text(`已读取 ${voices.length} 个声音`);
+            toastr.success(`读取到 ${voices.length} 个声音`, PROVIDER_NAME);
+        } catch (error) {
+            toastr.error(String(error.message || error), PROVIDER_NAME);
+        }
+    });
+
+    $('#fish_panel_test').on('click', async () => {
+        const provider = new FishAudioTtsProvider();
+        provider.settings = { ...defaultSettings, ...moduleSettings() };
+        const toast = toastr.info('正在合成测试语音…', PROVIDER_NAME, { timeOut: 0, extendedTimeOut: 0, tapToDismiss: false });
+        try {
+            const response = await provider.fetchTtsGeneration('这是一句 Fish Audio 配音测试。', provider.settings.referenceId);
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const audio = document.getElementById('fish_panel_audio');
+            audio.src = url;
+            await audio.play().catch(() => { /* 浏览器可能拦自动播放，不影响链路验证 */ });
+            $('#fish_panel_result').text(`合成成功：${Math.round(blob.size / 1024)} KB`);
+            toastr.success('配音链路正常', PROVIDER_NAME);
+        } catch (error) {
+            $('#fish_panel_result').text(`失败：${error.message || error}`);
+            toastr.error(String(error.message || error), PROVIDER_NAME, { timeOut: 10000 });
+        } finally {
+            if (toast?.length) toastr.clear(toast);
+        }
+    });
+}
+
+/**
+ * TTS 扩展是在页面加载早期就读 `extension_settings.tts.currentProvider` 的。
+ * 如果那时我们的渠道还没注册，它会找不到这个渠道、把下拉框回落到第一个选项，
+ * 于是存好的选择看起来"丢了"。注册完成后要主动把它接回去。
+ */
+function restoreProviderSelection() {
+    const tts = extension_settings.tts;
+    if (!tts || tts.currentProvider !== PROVIDER_NAME) {
+        return;
+    }
+    const select = $('#tts_provider');
+    const exists = select.find('option').filter((_, o) => o.value === PROVIDER_NAME).length > 0;
+    if (!exists || select.val() === PROVIDER_NAME) {
+        return;
+    }
+    select.val(PROVIDER_NAME).trigger('change');
+    console.log('[Fish Audio] 已恢复上次选中的渠道');
+}
+
 jQuery(async () => {
-    // 官方 TTS 扩展没启用时，registerTtsProvider 不可用，这里只报一次提示，不抛错。
+    const store = moduleSettings();
+
     try {
         registerTtsProvider(PROVIDER_NAME, FishAudioTtsProvider);
-        extension_settings[MODULE_NAME] = extension_settings[MODULE_NAME] || {};
         console.log('[Fish Audio] provider registered');
     } catch (error) {
-        console.error('[Fish Audio] 注册失败，请确认 TTS 扩展已启用', error);
+        // 官方 TTS 扩展没启用，或已经注册过（重复导入），不阻断面板显示。
+        console.warn('[Fish Audio] provider 注册跳过', error?.message || error);
     }
+
+    try {
+        const html = await renderExtensionTemplateAsync('third-party/' + FOLDER_NAME, 'settings');
+        $('#extensions_settings2').append(html);
+        syncPanelFromStore();
+        bindPanel();
+
+        // TTS 面板可能比扩展晚渲染，稍后刷新一次状态
+        setTimeout(() => { restoreProviderSelection(); renderPanelStatus(); }, 800);
+        setTimeout(() => { restoreProviderSelection(); renderPanelStatus(); }, 2500);
+        eventSource.on(event_types.APP_READY, () => {
+            setTimeout(() => { restoreProviderSelection(); renderPanelStatus(); }, 500);
+        });
+    } catch (error) {
+        console.error('[Fish Audio] 面板渲染失败', error);
+        toastr.error(String(error.message || error), 'Fish Audio');
+    }
+
+    console.log('[Fish Audio] loaded', store.model);
 });

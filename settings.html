@@ -1,0 +1,47 @@
+<div class="fish-tts-panel">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>Fish Audio TTS（配音）</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <p class="fish-tts-hint">
+                Fish Audio 配音渠道。请求走 SillyTavern 的 <code>/proxy/</code> 转发，
+                所以 <code>config.yaml</code> 里必须 <code>enableCorsProxy: true</code>。
+            </p>
+
+            <div id="fish_panel_status" class="fish-tts-status"></div>
+
+            <label for="fish_panel_api_key">Fish Audio 密钥</label>
+            <input id="fish_panel_api_key" type="password" class="text_pole" placeholder="粘贴 API Key" />
+
+            <label for="fish_panel_model">模型</label>
+            <input id="fish_panel_model" type="text" class="text_pole" placeholder="s2.1-pro-free" />
+
+            <label for="fish_panel_reference">默认声音 ID（reference_id）</label>
+            <input id="fish_panel_reference" type="text" class="text_pole" placeholder="6ce7ea8ada884bf3889fa7c7fb206691" />
+
+            <label class="checkbox_label" for="fish_panel_proxy">
+                <input id="fish_panel_proxy" type="checkbox" />
+                <span>走 SillyTavern 代理（不勾选会因跨域失败）</span>
+            </label>
+
+            <hr>
+
+            <div class="fish-tts-actions">
+                <div id="fish_panel_activate" class="menu_button">启用配音（切到此渠道并打开开关）</div>
+                <div id="fish_panel_test" class="menu_button">测试配音</div>
+                <div id="fish_panel_load_voices" class="menu_button">读取声音列表</div>
+            </div>
+
+            <div id="fish_panel_voice_count" class="fish-tts-hint"></div>
+            <div id="fish_panel_result" class="fish-tts-hint"></div>
+            <audio id="fish_panel_audio" controls></audio>
+
+            <p class="fish-tts-hint">
+                角色分声在「扩展」→「TTS」→「角色声音」里配置，旁白也要单独指定。
+                免费额度对应的模型是 <code>s2.1-pro-free</code>，它必须放在请求头里，本扩展已处理。
+            </p>
+        </div>
+    </div>
+</div>
