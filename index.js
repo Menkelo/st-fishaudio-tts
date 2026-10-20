@@ -23,6 +23,100 @@ const MODULE_NAME = 'fish-audio-tts';
 const FOLDER_NAME = 'st-fishaudio-tts';
 
 const ENDPOINT = 'https://api.fish.audio/v1/tts';
+
+/**
+ * Fish Audio 不返回 CORS 响应头，浏览器直接发会被拦。
+ * 不同宿主的可用通道不一样，按顺序试：
+ *
+ *  1. SillyTavern 的 /proxy/           —— 网页版 ST 的标准做法
+ *  2. TauriTavern 的 __TAURITAVERN__   —— 原生壳走 Rust 后端，天然无跨域
+ *  3. 直连                              —— 用户自己挂了 CORS 旁路时可用
+ *
+ * 探过一次就记住，之后直接用命中的那条，不会每次都试三遍。
+ */
+let transportCache = null;
+
+/**
+ * 用户自建中转的地址。填了就直接走它，最稳，因为中转会补 CORS 头。
+ * 手机端（TauriTavern）尤其需要这个：原生壳里没有 ST 的 /proxy/。
+ */
+function relayBase() {
+    const raw = String(moduleSettings().relayUrl || '').trim();
+    return raw ? raw.replace(/\/+$/, '') : '';
+}
+
+function tauriTavernFetch() {
+    // TauriTavern 暴露的扩展 ABI，内部走 Rust reqwest，不受浏览器跨域限制。
+    const abi = window.__TAURITAVERN__;
+    if (!abi) {
+        return null;
+    }
+    const candidates = [abi?.api?.http?.fetch, abi?.api?.fetch, abi?.http?.fetch, abi?.fetch];
+    for (const fn of candidates) {
+        if (typeof fn === 'function') {
+            return fn.bind(abi.api?.http || abi.api || abi);
+        }
+    }
+    return null;
+}
+
+async function fishFetch(url, { method, headers, body, useProxy }) {
+    const tried = [];
+    const base = relayBase();
+
+    const attempt = async (label, fn) => {
+        try {
+            const res = await fn();
+            if (res && (res.ok || res.status)) {
+                return { label, res };
+            }
+        } catch (error) {
+            tried.push(`${label}: ${error?.name || 'Error'} ${String(error?.message || '').slice(0, 80)}`);
+        }
+        return null;
+    };
+
+    // 中转地址形如 http://192.168.1.119:8090，请求路径直接拼上去
+    const viaRelay = () => {
+        if (!base) {
+            throw new Error('no relay');
+        }
+        const path = url.replace(/^https?:\/\/[^/]+/, '');
+        return fetch(base + path, { method, headers, body });
+    };
+    const viaProxy = () => fetch(`/proxy/${url}`, { method, headers, body });
+    const viaTauri = () => {
+        const fn = tauriTavernFetch();
+        if (!fn) {
+            throw new Error('no tauri abi');
+        }
+        return fn(url, { method, headers, body });
+    };
+    const viaDirect = () => fetch(url, { method, headers, body });
+
+    let order;
+    if (useProxy === false) {
+        order = [['direct', viaDirect]];
+    } else if (base) {
+        // 填了中转就优先它，失败再退到别的通道
+        order = [['relay', viaRelay], ['proxy', viaProxy], ['tauri', viaTauri], ['direct', viaDirect]];
+    } else {
+        order = [['proxy', viaProxy], ['tauri', viaTauri], ['direct', viaDirect]];
+    }
+
+    for (const [label, fn] of order) {
+        const hit = await attempt(label, fn);
+        if (hit) {
+            if (transportCache !== hit.label) {
+                transportCache = hit.label;
+                console.log(`[Fish Audio] 走 ${hit.label} 通道`);
+            }
+            return hit.res;
+        }
+    }
+
+    throw new Error(`连不上 Fish Audio（试过 ${tried.join('；') || '全部通道'}）`);
+}
 const DEFAULT_VOICE = '6ce7ea8ada884bf3889fa7c7fb206691';
 
 // 面板上的自检计数，用来证明"没有多余请求"。
@@ -111,6 +205,7 @@ const defaultSettings = {
     format: 'mp3',
     latency: 'normal',
     useProxy: true,
+    relayUrl: '',
     showReadButtons: true,
     clickQuotes: true,
     available_voices: [],
@@ -263,12 +358,10 @@ export class FishAudioTtsProvider {
 
     /** 拉取账号下的声音（如果该 key 有权限）。 */
     async fetchMyVoices() {
-        const url = this.settings.useProxy
-            ? '/proxy/https://api.fish.audio/model?page_size=50'
-            : 'https://api.fish.audio/model?page_size=50';
-        const response = await fetch(url, {
+        const response = await fishFetch('https://api.fish.audio/model?page_size=50', {
             method: 'GET',
             headers: { ...getRequestHeaders(), Authorization: `Bearer ${this.apiKey}` },
+            useProxy: this.settings.useProxy,
         });
         if (!response.ok) {
             throw new Error(`读取声音列表失败：HTTP ${response.status}`);
@@ -333,7 +426,6 @@ export class FishAudioTtsProvider {
             throw new Error('没有指定声音 ID');
         }
 
-        const endpoint = this.settings.useProxy ? `/proxy/${ENDPOINT}` : ENDPOINT;
         const headers = {
             ...getRequestHeaders(),
             'Content-Type': 'application/json',
@@ -345,15 +437,18 @@ export class FishAudioTtsProvider {
             headers['model'] = model;
         }
 
-        const response = await fetch(endpoint, {
+        const body = JSON.stringify({
+            text: String(text || ''),
+            reference_id: reference,
+            format: this.settings.format || 'mp3',
+            latency: this.settings.latency || 'normal',
+        });
+
+        const response = await fishFetch('https://api.fish.audio/v1/tts', {
             method: 'POST',
             headers,
-            body: JSON.stringify({
-                text: String(text || ''),
-                reference_id: reference,
-                format: this.settings.format || 'mp3',
-                latency: this.settings.latency || 'normal',
-            }),
+            body,
+            useProxy: this.settings.useProxy,
         });
 
         if (!response.ok) {
@@ -820,6 +915,7 @@ function syncPanelFromStore() {
     $('#fish_panel_model').val(s.model || defaultSettings.model);
     $('#fish_panel_reference').val(s.referenceId || '');
     $('#fish_panel_proxy').prop('checked', s.useProxy !== false);
+    $('#fish_panel_relay').val(s.relayUrl || '');
     $('#fish_panel_sentences').prop('checked', isSentenceMode());
     $('#fish_panel_clickplay').prop('checked', isClickToPlay());
     $('#fish_panel_showbtns').prop('checked', isShowingReadButtons());
@@ -879,6 +975,13 @@ function bindPanel() {
         moduleSettings().referenceId = String($('#fish_panel_reference').val() || '').trim();
         saveSettingsDebounced();
     });
+    $('#fish_panel_relay').on('change', () => {
+        moduleSettings().relayUrl = String($('#fish_panel_relay').val() || '').trim();
+        transportCache = null; // 地址变了，重新探
+        saveSettingsDebounced();
+        renderPanelStatus();
+    });
+
     $('#fish_panel_proxy').on('change', () => {
         moduleSettings().useProxy = Boolean($('#fish_panel_proxy').prop('checked'));
         saveSettingsDebounced();

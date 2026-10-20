@@ -21,9 +21,16 @@
             <label for="fish_panel_reference">默认声音 ID（reference_id）</label>
             <input id="fish_panel_reference" type="text" class="text_pole" placeholder="6ce7ea8ada884bf3889fa7c7fb206691" />
 
+            <label for="fish_panel_relay">中转地址（可选，手机端建议填）</label>
+            <input id="fish_panel_relay" type="text" class="text_pole" placeholder="http://192.168.1.119:8090" />
+            <p class="fish-tts-hint">
+                手机端 / TauriTavern 没有 ST 的 <code>/proxy/</code>，而 Fish Audio 不返回跨域许可，浏览器会拒收音频。
+                填上自建中转地址即可。留空则自动尝试。
+            </p>
+
             <label class="checkbox_label" for="fish_panel_proxy">
                 <input id="fish_panel_proxy" type="checkbox" />
-                <span>走 SillyTavern 代理（不勾选会因跨域失败）</span>
+                <span>允许走 SillyTavern 代理 / 自动通道（不勾选只直连）</span>
             </label>
 
             <hr>

@@ -67,6 +67,20 @@ Fish Audio 的免费模型 `s2.1-pro-free` **必须放在请求头 `model`** 里
 
 这条路径**不经过** SillyTavern 的朗读队列，自己合成、自己播放。所以它不受朗读键隐藏、声音映射缺失、自动播放开关影响，是「只念某一句台词」最省事的方式。
 
+## 手机 / TauriTavern 必须填中转地址
+
+**Fish Audio 的 `/v1/tts` 不返回 `Access-Control-Allow-Origin`**，而 `/wallet`、`/model` 这两个接口却返回。所以浏览器（含 TauriTavern 的 webview）拿到音频后仍然会拒收。
+
+这不是网络问题，**开代理软件（梯子）解决不了**：代理管的是数据包能不能到，CORS 是服务器回包里的许可声明。
+
+网页版 SillyTavern 靠自带的 `/proxy/` 绕过去了。TauriTavern 没有这个路由，所以要在面板里填 **中转地址**：
+
+```
+http://<NAS的局域网IP>:8090
+```
+
+中转服务会代替浏览器请求 Fish Audio，回来时补上跨域许可头。
+
 ## 逐句朗读 / 只念台词
 
 面板里有 **点击播放** 和 **逐句朗读** 两个开关。
