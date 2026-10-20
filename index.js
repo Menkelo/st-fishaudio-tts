@@ -391,6 +391,135 @@ function isSentenceMode() {
     return Boolean(tts.multi_voice_enabled && tts.narrate_by_paragraphs);
 }
 
+// 逐角色朗读模式 -------------------------------------------------------
+// 每个角色在 ST 里有三个映射键：引号对话 / 星号动作 / 其他文字。
+// 把后两个设成 disabled，就只念这个角色的引号句子。
+
+const CHAR_MODES = {
+    all: '全部朗读',
+    quotes: '只念引号句',
+    off: '不朗读',
+};
+
+function quoteKey(name) {
+    return `${name} ("Quotes")`;
+}
+
+function actionKey(name) {
+    return `${name} (*Text inside asterisks*)`;
+}
+
+function otherKey(name) {
+    return `${name} (Other text)`;
+}
+
+/** 当前聊天里需要出现在列表中的角色名。 */
+function chatCharacterNames() {
+    const context = getContext();
+    const names = [];
+    if (context.groupId !== null && context.groups) {
+        const group = context.groups.find(item => item.id == context.groupId);
+        for (const member of group?.members || []) {
+            const character = (context.characters || []).find(item => item.avatar === member);
+            if (character) {
+                names.push(character.name);
+            }
+        }
+    } else if (context.name2) {
+        names.push(context.name2);
+    }
+    for (const message of context.chat || []) {
+        if (message?.name && !message.is_user) {
+            names.push(message.name);
+        }
+    }
+    return [...new Set(names)].filter(name => name && name !== 'SillyTavern System' && name !== DEFAULT_VOICE_MARKER);
+}
+
+function characterMode(name) {
+    const map = extension_settings.tts?.[PROVIDER_NAME]?.voiceMap || {};
+    const quote = map[quoteKey(name)];
+    const action = map[actionKey(name)];
+    const other = map[otherKey(name)];
+    const silent = value => !value || value === DISABLED_VOICE_MARKER;
+    if (silent(quote) && silent(action) && silent(other)) {
+        return 'off';
+    }
+    if (!silent(quote) && silent(action) && silent(other)) {
+        return 'quotes';
+    }
+    return 'all';
+}
+
+/** 把某个角色设成 全部朗读 / 只念引号句 / 不朗读。 */
+async function setCharacterMode(name, mode) {
+    const store = extension_settings.tts[PROVIDER_NAME] = extension_settings.tts[PROVIDER_NAME] || {};
+    store.voiceMap = store.voiceMap || {};
+    const map = store.voiceMap;
+    const on = DEFAULT_VOICE_MARKER;
+    const off = DISABLED_VOICE_MARKER;
+
+    if (mode === 'off') {
+        map[quoteKey(name)] = off;
+        map[actionKey(name)] = off;
+        map[otherKey(name)] = off;
+    } else if (mode === 'quotes') {
+        map[quoteKey(name)] = on;
+        map[actionKey(name)] = off;
+        map[otherKey(name)] = off;
+    } else {
+        map[quoteKey(name)] = on;
+        map[actionKey(name)] = on;
+        map[otherKey(name)] = on;
+        if (!map[name]) {
+            map[name] = on;
+        }
+    }
+
+    // 没开逐句朗读的话，上面这些分轨键根本不会被查，等于白设。
+    if (mode !== 'all') {
+        enableSentenceMode(true);
+        $('#fish_panel_sentences').prop('checked', true);
+    }
+
+    saveSettingsDebounced();
+    // 必须重建运行时表：ST 的朗读查的是模块内部的 voiceMap，
+    // 只改 extension_settings 要等下次刷新才生效。
+    // initVoiceMap(false) 会用上面写好的值重建它，且不会丢 disabled。
+    try {
+        await initVoiceMap(false);
+    } catch (error) {
+        console.warn('[Fish Audio] 重建声音映射失败', error);
+    }
+    renderCharacterModes();
+    renderPanelStatus();
+}
+
+function renderCharacterModes() {
+    const host = $('#fish_panel_char_modes');
+    if (!host.length) {
+        return;
+    }
+    const names = chatCharacterNames();
+    if (!names.length) {
+        host.html('<div class="fish-tts-hint">当前聊天里还没有角色。先选一张人物卡或打开一个对话。</div>');
+        return;
+    }
+    host.empty();
+    for (const name of names) {
+        const current = characterMode(name);
+        const options = Object.entries(CHAR_MODES)
+            .map(([value, label]) => `<option value="${value}"${value === current ? ' selected' : ''}>${label}</option>`)
+            .join('');
+        const row = $(`<div class="fish-tts-char-row"><span class="fish-tts-char-name"></span><select class="text_pole fish-tts-char-select">${options}</select></div>`);
+        row.find('.fish-tts-char-name').text(name);
+        row.find('select').on('change', async (event) => {
+            await setCharacterMode(name, event.currentTarget.value);
+        });
+        host.append(row);
+    }
+}
+
 function syncPanelFromStore() {
     const s = moduleSettings();
     $('#fish_panel_api_key').val(s.apiKey || '');
@@ -399,6 +528,7 @@ function syncPanelFromStore() {
     $('#fish_panel_proxy').prop('checked', s.useProxy !== false);
     $('#fish_panel_sentences').prop('checked', isSentenceMode());
     renderPanelStatus();
+    renderCharacterModes();
 }
 
 function renderPanelStatus() {
@@ -543,6 +673,10 @@ jQuery(async () => {
         setTimeout(() => { restoreProviderSelection(); renderPanelStatus(); }, 2500);
         eventSource.on(event_types.APP_READY, () => {
             setTimeout(() => { restoreProviderSelection(); renderPanelStatus(); }, 500);
+        });
+        // 换人物卡 / 换聊天后要重建角色列表，否则列表还停在旧会话上
+        eventSource.on(event_types.CHAT_CHANGED, () => {
+            setTimeout(() => { renderCharacterModes(); renderPanelStatus(); }, 800);
         });
     } catch (error) {
         console.error('[Fish Audio] 面板渲染失败', error);
