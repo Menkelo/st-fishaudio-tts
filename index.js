@@ -24,6 +24,61 @@ const FOLDER_NAME = 'st-fishaudio-tts';
 const ENDPOINT = 'https://api.fish.audio/v1/tts';
 const DEFAULT_VOICE = '6ce7ea8ada884bf3889fa7c7fb206691';
 
+// 面板上的自检计数，用来证明"没有多余请求"。
+const runtimeStats = { requests: 0, skipped: 0, lastTexts: [] };
+
+const QUOTE_SUFFIX = '("Quotes")';
+const ACTION_SUFFIX = '(*Text inside asterisks*)';
+const OTHER_SUFFIX = '(Other text)';
+
+/**
+ * 一段 120ms 的静音 WAV。
+ *
+ * ST 在"这个角色的这段不该念"时本来会自己跳过，但不同版本/配置下未必走到那一步。
+ * 这里在真正发 HTTP 之前再挡一道：不该念的段落返回静音，
+ * 保证一个字节的请求都不会发出去，也不占 Fish Audio 的额度。
+ */
+function silentWav(durationMs = 120) {
+    const rate = 24000;
+    const samples = Math.floor((rate * durationMs) / 1000);
+    const buffer = new ArrayBuffer(44 + samples * 2);
+    const view = new DataView(buffer);
+    const writeString = (offset, text) => {
+        for (let i = 0; i < text.length; i += 1) {
+            view.setUint8(offset + i, text.charCodeAt(i));
+        }
+    };
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + samples * 2, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, rate, true);
+    view.setUint32(28, rate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, samples * 2, true);
+    return new Blob([buffer], { type: 'audio/wav' });
+}
+
+/** 这个段落在当前设置下该不该念。 */
+function shouldSkipSegment(voiceMapKey) {
+    if (!voiceMapKey) {
+        return false;
+    }
+    const map = extension_settings.tts?.[PROVIDER_NAME]?.voiceMap;
+    if (!map) {
+        return false;
+    }
+    if (!voiceMapKey.endsWith(QUOTE_SUFFIX) && !voiceMapKey.endsWith(ACTION_SUFFIX) && !voiceMapKey.endsWith(OTHER_SUFFIX)) {
+        return false;
+    }
+    return map[voiceMapKey] === DISABLED_VOICE_MARKER;
+}
+
 const defaultSettings = {
     apiKey: '',
     model: 's2.1-pro-free',
@@ -215,7 +270,18 @@ export class FishAudioTtsProvider {
         return match;
     }
 
-    async generateTts(text, voiceId) {
+    async generateTts(text, voiceId, voiceMapKey) {
+        // 不在"该念"名单里的段落，一个请求都不发，直接给静音。
+        const silent = shouldSkipSegment(voiceMapKey);
+        runtimeStats.requests += silent ? 0 : 1;
+        runtimeStats.skipped += silent ? 1 : 0;
+        runtimeStats.lastTexts.unshift({ text: String(text || '').slice(0, 40), skipped: silent, key: String(voiceMapKey || '').slice(0, 60) });
+        runtimeStats.lastTexts = runtimeStats.lastTexts.slice(0, 8);
+
+        if (silent) {
+            console.log('[Fish Audio] 跳过不该念的段落：' + String(text || '').slice(0, 40));
+            return silentWav();
+        }
         return this.fetchTtsGeneration(text, voiceId);
     }
 
@@ -546,6 +612,20 @@ function renderPanelStatus() {
         `TTS 总开关：<b>${ttsEnabled ? '已开' : '关'}</b>`,
         `逐句朗读：<b style="color:${sentence ? 'inherit' : 'red'}">${sentence ? '已开' : '关（整段念）'}</b>`,
     ].join(' ｜ '));
+
+    $('#fish_panel_counter').html(
+        `本次会话：发出 <b>${runtimeStats.requests}</b> 次合成请求，`
+        + `在本地挡掉 <b>${runtimeStats.skipped}</b> 段不该念的内容`
+        + (runtimeStats.lastTexts.length ? '<br><span style="opacity:.7">最近：</span>'
+            + runtimeStats.lastTexts.map(item => `${item.skipped ? '🚫' : '🔊'} ${escapeHtml(item.text)}`).join(' ｜ ')
+            : ''),
+    );
+}
+
+function escapeHtml(text) {
+    return String(text).replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[ch]));
 }
 
 function bindPanel() {
@@ -677,6 +757,10 @@ jQuery(async () => {
         // 换人物卡 / 换聊天后要重建角色列表，否则列表还停在旧会话上
         eventSource.on(event_types.CHAT_CHANGED, () => {
             setTimeout(() => { renderCharacterModes(); renderPanelStatus(); }, 800);
+        });
+        // 每念一段就刷新计数，方便当场确认有没有多余请求
+        eventSource.on(event_types.TTS_JOB_STARTED, () => {
+            setTimeout(renderPanelStatus, 0);
         });
     } catch (error) {
         console.error('[Fish Audio] 面板渲染失败', error);
