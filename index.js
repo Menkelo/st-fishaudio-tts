@@ -476,9 +476,29 @@ function enableSentenceMode(on) {
     saveSettingsDebounced();
 }
 
+/**
+ * 「点击播放」= 关掉 ST 的自动朗读。
+ *
+ * ST 的 auto_generation 控制的是"来新消息就自动念"。
+ * 关掉之后朗读按钮照样能用，只是不会自己开口。
+ */
+function setClickToPlay(on) {
+    const tts = extension_settings.tts;
+    if (!tts) {
+        return;
+    }
+    tts.auto_generation = !on;
+    $('#tts_auto_generation').prop('checked', !on);
+    saveSettingsDebounced();
+}
+
 function isSentenceMode() {
     const tts = extension_settings.tts || {};
     return Boolean(tts.multi_voice_enabled && tts.narrate_by_paragraphs);
+}
+
+function isClickToPlay() {
+    return extension_settings.tts ? !extension_settings.tts.auto_generation : false;
 }
 
 // 逐角色朗读模式 -------------------------------------------------------
@@ -617,6 +637,7 @@ function syncPanelFromStore() {
     $('#fish_panel_reference').val(s.referenceId || '');
     $('#fish_panel_proxy').prop('checked', s.useProxy !== false);
     $('#fish_panel_sentences').prop('checked', isSentenceMode());
+    $('#fish_panel_clickplay').prop('checked', isClickToPlay());
     renderPanelStatus();
     renderCharacterModes();
 }
@@ -628,6 +649,7 @@ function renderPanelStatus() {
     const currentProvider = $('#tts_provider').val();
     const ttsEnabled = $('#tts_enabled').prop('checked');
     const sentence = isSentenceMode();
+    const clickPlay = isClickToPlay();
 
     $('#fish_panel_status').html([
         `密钥：<b style="color:${hasKey ? 'inherit' : 'red'}">${hasKey ? '已填' : '未填'}</b>`,
@@ -635,6 +657,7 @@ function renderPanelStatus() {
         `当前渠道：<b>${currentProvider || '未选'}</b>`,
         `TTS 总开关：<b>${ttsEnabled ? '已开' : '关'}</b>`,
         `逐句朗读：<b style="color:${sentence ? 'inherit' : 'red'}">${sentence ? '已开' : '关（整段念）'}</b>`,
+        `播放方式：<b>${clickPlay ? '点击才念' : '新消息自动念'}</b>`,
     ].join(' ｜ '));
 
     $('#fish_panel_counter').html(
@@ -701,6 +724,11 @@ function bindPanel() {
 
     $('#fish_panel_sentences').on('change', () => {
         enableSentenceMode(Boolean($('#fish_panel_sentences').prop('checked')));
+        renderPanelStatus();
+    });
+
+    $('#fish_panel_clickplay').on('change', () => {
+        setClickToPlay(Boolean($('#fish_panel_clickplay').prop('checked')));
         renderPanelStatus();
     });
 
@@ -790,6 +818,12 @@ jQuery(async () => {
         // 每念一段就刷新计数，方便当场确认有没有多余请求
         eventSource.on(event_types.TTS_JOB_STARTED, () => {
             setTimeout(renderPanelStatus, 0);
+        });
+
+        // 手动点朗读走的是另一条路径，不会自动补声音映射，
+        // 缺分轨键就会抛 "not in voicemap"。点之前先补齐。
+        $(document).on('click', '.mes_narrate', () => {
+            ensureVoiceMapReady().catch(error => console.warn('[Fish Audio] 点击前补映射失败', error));
         });
     } catch (error) {
         console.error('[Fish Audio] 面板渲染失败', error);
