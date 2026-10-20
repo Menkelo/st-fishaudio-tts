@@ -1,0 +1,11 @@
+{
+    "display_name": "Fish Audio TTS (配音)",
+    "loading_order": 21,
+    "requires": [],
+    "optional": ["tts"],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Menkelo",
+    "version": "1.0.0",
+    "homePage": "https://github.com/Menkelo/st-fishaudio-tts"
+}
